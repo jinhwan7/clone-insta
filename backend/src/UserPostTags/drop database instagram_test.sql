@@ -1,0 +1,1 @@
+drop database instagram_test

@@ -1,0 +1,104 @@
+# name: deploy
+
+# on:
+#   push:
+#     branches: [develop]
+#   pull_request:
+#     branches: [develop]
+
+# jobs:
+#   build:
+#     runs-on: ubuntu-20.04
+
+#     strategy:
+#       matrix:
+#         node-version: [16.19.x]
+#     steps:
+#       - uses: actions/checkout@v3
+#         with:
+#           path: dist
+name: deploy
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  pull_request:
+    branches: ["deploy"]
+
+jobs:
+  if_merged:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - run: build
+
+  build:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+
+    env:
+      working-directory: ./apps/server
+
+    strategy:
+      matrix:
+        node-version: [18.13.0]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install pnpm
+        run: |
+          npm install -g pnpm
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+          cache-dependency-path: "./pnpm-lock.yaml"
+
+      #       - name: create env file
+      #         working-directory: ${{ env.working-directory }}
+      #         run: |
+      #           pwd
+      #           touch .env
+      #           echo DATABASE_HOST=${{ secrets.DATABASE_HOST }} >> .env
+      #           echo DATABASE_NAME=${{ secrets.DATABASE_NAME }} >> .env
+      #           echo DATABASE_DEBUG=${{ secrets.DATABASE_OPTIONS }} >> .env
+      #           echo DATABASE_USER=${{ secrets.DATABASE_USER }} >> .env
+      #           echo DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }} >> .env
+      #           echo HTTP_ENABLE=${{ secrets.HTTP_HOST }} >> .env
+      #           echo HTTP_PORT=${{ secrets.HTTP_PORT }} >> .env
+      #           echo HTTP_VERSIONING_ENABLE=${{ secrets.HTTP_VERSIONING_ENABLE }} >> .env
+      #           echo HTTP_VERSION=${{ secrets.HTTP_VERSION }} >> .env
+      #           echo APP_NAME=${{ secrets.APP_NAME }} >> .env
+      #           echo APP_ENV=${{ secrets.APP_ENV }} >> .env
+      #           echo APP_LANGUAGE=${{ secrets.APP_LANGUAGE }} >> .env
+      #           echo JWT_SECRET=${{ secrets.JWT_SECRET }} >> .env
+      #           cat .env
+
+      - name: zip file
+        working-directory: ./
+        run: zip -r newProductBackEnd.zip ./ -x "./apps/admin/**" -x "./apps/iframe/**"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Upload to S3
+        working-directory: ./
+        run: aws s3 cp --region ap-northeast-2 ./newProductBackEnd.zip s3://${{ secrets.AWS_S3_BUCKET_NAME }}/new-product-nestjs-server-deploy/
+
+      - name: deploy with AWS codeDeploy
+        working-directory: ./
+        run: aws deploy create-deployment
+          --application-name new-product-nestjs-server-deploy
+          --deployment-config-name CodeDeployDefault.OneAtATime
+          --deployment-group-name new-product-nestjs-server-deploy-group
+          --s3-location bucket=${{ secrets.AWS_S3_BUCKET_NAME }},bundleType=zip,key=new-product-nestjs-server-deploy/newProductBackEnd.zip
